@@ -152,6 +152,11 @@ ENGINE_REGISTRY: Dict[str, EngineEntry] = {
         module_path=".engines.search_engine_guardian",
         class_name="GuardianSearchEngine",
     ),
+    # --- Local git repo search ---
+    "git_repo": EngineEntry(
+        module_path=".engines.search_engine_git_repo",
+        class_name="GitRepoSearchEngine",
+    ),
     # --- Meta engine ---
     "auto": EngineEntry(
         module_path=".engines.meta_search_engine",
