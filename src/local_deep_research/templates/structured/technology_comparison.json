@@ -1,0 +1,20 @@
+{
+  "name": "Technology Comparison",
+  "description": "Compare technologies, standards, or approaches",
+  "query_hint": "e.g., 'Biometric authentication methods'",
+  "dimensions": [
+    {
+      "name": "technology",
+      "values": [],
+      "placeholder": "Enter technologies or set to discover"
+    }
+  ],
+  "fields": [
+    {"name": "description", "type": "string", "description": "Brief description of the technology"},
+    {"name": "maturity", "type": "enum", "options": ["emerging", "growing", "mature", "declining"]},
+    {"name": "primary_use_cases", "type": "string", "description": "Main applications and use cases"},
+    {"name": "key_vendors", "type": "string", "description": "Major providers or implementers"},
+    {"name": "limitations", "type": "string", "description": "Known limitations or drawbacks"},
+    {"name": "cost_range", "type": "string", "description": "Typical cost range or pricing tier"}
+  ]
+}

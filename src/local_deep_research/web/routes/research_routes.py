@@ -1240,9 +1240,16 @@ def get_research_report(research_id):
             # Return the report data with backwards-compatible fields
             # Examples expect 'summary', 'sources', 'findings' at top level
             safe_metadata = strip_settings_snapshot(metadata)
+
+            # For structured research, include structured_data in response
+            structured_data = None
+            if metadata and metadata.get("structured_data"):
+                structured_data = metadata["structured_data"]
+
             return jsonify(
                 {
                     "content": content,
+                    "structured_data": structured_data,
                     # Backwards-compatible fields for examples
                     "summary": content,  # The markdown report is the summary
                     "sources": safe_metadata.get("all_links_of_system", []),
@@ -1314,6 +1321,37 @@ def export_research_report(research_id, format):
                     session=db_session, settings_snapshot=settings_snapshot
                 )
 
+                # Check for structured research — bypass markdown pipeline
+                meta = research.research_meta or {}
+                structured_data = meta.get("structured_data")
+                if structured_data:
+                    try:
+                        from ...exporters import (
+                            ExporterRegistry,
+                            ExportOptions,
+                        )
+
+                        exporter = ExporterRegistry.get_exporter(format)
+                        if not exporter:
+                            return jsonify({"error": f"No exporter for format: {format}"}), 400
+
+                        options = ExportOptions(
+                            title=research.title or research.query,
+                            custom_options={"structured_data": structured_data},
+                        )
+                        result = exporter.export("", options)
+
+                        return send_file(
+                            io.BytesIO(result.content),
+                            as_attachment=True,
+                            download_name=result.filename,
+                            mimetype=result.mimetype,
+                        )
+                    except Exception:
+                        logger.exception("Error exporting structured data")
+                        return jsonify({"error": f"Failed to export structured data as {format}"}), 500
+
+                # Standard markdown-based export path
                 # Get report content directly (in memory)
                 report_content = storage.get_report(research_id, username)
                 if not report_content:
@@ -1480,6 +1518,10 @@ def get_research_status(research_id):
                 "report_path": report_path,
                 "metadata": filtered_metadata,
             }
+
+            # Include structured phase for structured research sessions
+            if metadata.get("structured_phase"):
+                response_data["phase"] = metadata["structured_phase"]
 
             # Include latest milestone as a log_entry for frontend compatibility
             if latest_milestone:
@@ -1698,3 +1740,713 @@ def upload_pdf():
     except Exception:
         logger.exception("Error processing PDF upload")
         return jsonify({"error": "Failed to process PDF files"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Structured Research Endpoints
+# ---------------------------------------------------------------------------
+
+
+@research_bp.route("/api/research/structured", methods=["POST"])
+@login_required
+@require_json_body(error_format="status")
+def start_structured_research():
+    """Create a structured research session.
+
+    Accepts a schema definition (query, dimensions, fields, options).
+    If dimensions require discovery, runs discovery and returns discovered
+    values for user review.  If all dimensions are static (or auto_execute
+    is set), proceeds directly to cell research.
+    """
+    data = request.json
+    query = data.get("query")
+    if not query:
+        return jsonify({"status": "error", "message": "Query is required"}), 400
+
+    schema_definition = {
+        "query": query,
+        "dimensions": data.get("dimensions", []),
+        "fields": data.get("fields", []),
+        "options": data.get("options", {}),
+    }
+
+    if not schema_definition["dimensions"]:
+        return jsonify(
+            {"status": "error", "message": "At least one dimension is required"}
+        ), 400
+
+    if not schema_definition["fields"]:
+        return jsonify(
+            {"status": "error", "message": "At least one field is required"}
+        ), 400
+
+    username = session["username"]
+    auto_execute = schema_definition["options"].get("auto_execute", False)
+
+    import uuid
+
+    research_id = str(uuid.uuid4())
+    created_at = datetime.now(UTC).isoformat()
+
+    # Determine if discovery is needed
+    needs_discovery = _schema_needs_discovery(schema_definition["dimensions"])
+
+    # Build research_meta
+    research_meta = {
+        "submission": {
+            "mode": "structured",
+            "schema_definition": schema_definition,
+        },
+        "system": {
+            "timestamp": created_at,
+            "user": username,
+            "version": "1.0",
+        },
+        "structured_phase": "discovery" if needs_discovery else "ready",
+    }
+
+    # Get settings snapshot
+    try:
+        from ...settings import SettingsManager
+
+        db_session = get_g_db_session()
+        if db_session:
+            settings_manager = SettingsManager(db_session, owns_session=False)
+            try:
+                db_session.commit()
+            except Exception:
+                db_session.rollback()
+            research_meta["settings_snapshot"] = (
+                settings_manager.get_all_settings(bypass_cache=True)
+            )
+    except Exception:
+        logger.warning("Could not capture settings snapshot for structured research")
+
+    # Create the research record
+    try:
+        db_session = get_g_db_session()
+        if not db_session:
+            return jsonify(
+                {"status": "error", "message": "Database session unavailable"}
+            ), 500
+
+        research = ResearchHistory(
+            id=research_id,
+            query=query,
+            mode="structured",
+            status=ResearchStatus.IN_PROGRESS,
+            created_at=created_at,
+            progress_log=[{"time": created_at, "progress": 0}],
+            research_meta=research_meta,
+        )
+        db_session.add(research)
+        db_session.commit()
+    except Exception:
+        logger.exception("Failed to create structured research entry")
+        return jsonify(
+            {"status": "error", "message": "Failed to create research entry"}
+        ), 500
+
+    # If no discovery needed and auto_execute, start immediately
+    if not needs_discovery and auto_execute:
+        _start_structured_execution(research_id, username, research_meta)
+        return jsonify({
+            "status": "in_progress",
+            "phase": "researching",
+            "research_id": research_id,
+        })
+
+    if not needs_discovery:
+        # All static — ready to execute
+        total_cells = _count_leaf_cells(schema_definition["dimensions"])
+        return jsonify({
+            "status": "in_progress",
+            "phase": "ready",
+            "research_id": research_id,
+            "total_cells": total_cells,
+        })
+
+    # Discovery needed — run discovery to resolve dimension values
+    try:
+        from ...config.llm_config import get_llm
+        from ...web_search_engines.search_engine_factory import create_search_engine
+
+        settings_snapshot = research_meta.get("settings_snapshot", {})
+        disc_llm = get_llm(settings_snapshot=settings_snapshot)
+
+        from ...settings import SettingsManager
+        with get_user_db_session(username) as db_session_se:
+            se_manager = SettingsManager(db_session=db_session_se)
+            se_params = _extract_research_params({}, se_manager)
+        disc_search = create_search_engine(
+            se_params.get("search_engine", ""),
+            llm=disc_llm,
+            settings_snapshot=settings_snapshot,
+        )
+
+        from ..services._structured_discovery import run_discovery
+
+        discoveries = run_discovery(
+            dimensions=schema_definition["dimensions"],
+            query=query,
+            llm=disc_llm,
+            search=disc_search,
+        )
+
+        # Update the stored schema with discovered values
+        research_meta["submission"]["schema_definition"] = schema_definition
+        research_meta["structured_phase"] = "ready" if not _schema_needs_discovery(
+            schema_definition["dimensions"]
+        ) else "discovery"
+
+        with get_user_db_session(username) as db_session_upd:
+            research = (
+                db_session_upd.query(ResearchHistory)
+                .filter_by(id=research_id)
+                .first()
+            )
+            if research:
+                research.research_meta = research_meta
+                from sqlalchemy.orm.attributes import flag_modified
+                flag_modified(research, "research_meta")
+                db_session_upd.commit()
+
+        total_cells = _count_leaf_cells(schema_definition["dimensions"])
+
+        # Auto-execute if all discovery resolved and auto_execute is set
+        if auto_execute and not _schema_needs_discovery(schema_definition["dimensions"]):
+            _start_structured_execution(research_id, username, research_meta)
+            return jsonify({
+                "status": "in_progress",
+                "phase": "researching",
+                "research_id": research_id,
+            })
+
+        return jsonify({
+            "status": "in_progress",
+            "phase": research_meta["structured_phase"],
+            "research_id": research_id,
+            "total_cells": total_cells,
+            "discoveries": discoveries,
+            "schema": schema_definition,
+        })
+
+    except Exception:
+        logger.exception("Discovery failed")
+        # Fall back to ready with whatever values exist
+        return jsonify({
+            "status": "in_progress",
+            "phase": "ready",
+            "research_id": research_id,
+            "schema": schema_definition,
+            "warning": "Discovery failed — proceed with manually specified values",
+        })
+
+
+@research_bp.route(
+    "/api/research/<string:research_id>/dimensions", methods=["PATCH"]
+)
+@login_required
+@require_json_body(error_format="status")
+def update_structured_dimensions(research_id):
+    """Update dimensions for a structured research session.
+
+    Used during the discovery review step to approve/remove/add values
+    and trigger deeper discovery.
+    """
+    username = session["username"]
+    data = request.json
+
+    try:
+        with get_user_db_session(username) as db_session:
+            research = (
+                db_session.query(ResearchHistory)
+                .filter_by(id=research_id)
+                .first()
+            )
+            if not research:
+                return jsonify({"error": "Research not found"}), 404
+            if research.mode != "structured":
+                return jsonify({"error": "Not a structured research session"}), 400
+
+            meta = research.research_meta or {}
+            schema = meta.get("submission", {}).get("schema_definition", {})
+
+            # Full schema replacement (from refinement panel)
+            if data.get("schema_definition"):
+                schema = data["schema_definition"]
+                meta["submission"]["schema_definition"] = schema
+            else:
+                # Incremental mutations (approve/remove/add values)
+                approve = data.get("approve", [])
+                remove = data.get("remove", [])
+                add = data.get("add", [])
+
+                if approve or remove or add:
+                    _apply_dimension_mutations(schema["dimensions"], approve, remove, add)
+
+                # Update in database
+                meta["submission"]["schema_definition"] = schema
+
+            # Check if more discovery is needed
+            if data.get("discover_next_level"):
+                meta["structured_phase"] = "discovery"
+            elif _schema_needs_discovery(schema.get("dimensions", [])):
+                meta["structured_phase"] = "discovery"
+            else:
+                meta["structured_phase"] = "ready"
+
+            research.research_meta = meta
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(research, "research_meta")
+            db_session.commit()
+
+            total_cells = _count_leaf_cells(schema.get("dimensions", []))
+            return jsonify({
+                "status": "in_progress",
+                "phase": meta["structured_phase"],
+                "research_id": research_id,
+                "total_cells": total_cells,
+                "schema": schema,
+            })
+
+    except Exception:
+        logger.exception("Error updating structured dimensions")
+        return jsonify({"error": "Failed to update dimensions"}), 500
+
+
+@research_bp.route(
+    "/api/research/<string:research_id>/execute", methods=["POST"]
+)
+@login_required
+def execute_structured_research(research_id):
+    """Begin cell research for a structured session in 'ready' state."""
+    username = session["username"]
+
+    try:
+        with get_user_db_session(username) as db_session:
+            research = (
+                db_session.query(ResearchHistory)
+                .filter_by(id=research_id)
+                .first()
+            )
+            if not research:
+                return jsonify({"error": "Research not found"}), 404
+            if research.mode != "structured":
+                return jsonify({"error": "Not a structured research session"}), 400
+
+            meta = research.research_meta or {}
+            phase = meta.get("structured_phase", "")
+
+            if phase not in ("ready", "refinable"):
+                return jsonify({
+                    "error": f"Cannot execute from phase '{phase}'. Must be 'ready' or 'refinable'."
+                }), 400
+
+            meta["structured_phase"] = "researching"
+            research.research_meta = meta
+            research.status = ResearchStatus.IN_PROGRESS
+            db_session.commit()
+
+        _start_structured_execution(research_id, username, meta)
+
+        return jsonify({
+            "status": "in_progress",
+            "phase": "researching",
+            "research_id": research_id,
+        })
+
+    except Exception:
+        logger.exception("Error starting structured execution")
+        return jsonify({"error": "Failed to start execution"}), 500
+
+
+@research_bp.route(
+    "/api/research/<string:research_id>/history", methods=["GET"]
+)
+@login_required
+def get_structured_history(research_id):
+    """Get dimension history entries for a structured research session."""
+    username = session["username"]
+
+    try:
+        with get_user_db_session(username) as db_session:
+            research = (
+                db_session.query(ResearchHistory)
+                .filter_by(id=research_id)
+                .first()
+            )
+            if not research:
+                return jsonify({"error": "Research not found"}), 404
+
+            meta = research.research_meta or {}
+            history = meta.get("dimension_history", [])
+
+            return jsonify({
+                "status": "success",
+                "research_id": research_id,
+                "history": history,
+            })
+
+    except Exception:
+        logger.exception("Error fetching structured history")
+        return jsonify({"error": "Failed to fetch history"}), 500
+
+
+@research_bp.route(
+    "/api/research/<string:research_id>/resolve-conflict", methods=["PATCH"]
+)
+@login_required
+@require_json_body(error_format="status")
+def resolve_structured_conflict(research_id):
+    """Resolve a cross-level data conflict in structured research."""
+    username = session["username"]
+    data = request.json
+
+    cell_id = data.get("cell_id")
+    item_id = data.get("item_id")
+    field = data.get("field")
+    resolved_value = data.get("resolved_value")
+
+    if not all([cell_id, item_id, field, resolved_value]):
+        return jsonify({
+            "error": "cell_id, item_id, field, and resolved_value are all required"
+        }), 400
+
+    try:
+        with get_user_db_session(username) as db_session:
+            research = (
+                db_session.query(ResearchHistory)
+                .filter_by(id=research_id)
+                .first()
+            )
+            if not research:
+                return jsonify({"error": "Research not found"}), 404
+
+            meta = research.research_meta or {}
+            structured_data = meta.get("structured_data", {})
+            cells = structured_data.get("cells", [])
+
+            resolved = False
+            for cell in cells:
+                if cell.get("cell_id") != cell_id:
+                    continue
+                for item in cell.get("items", []):
+                    if item.get("item_id") != item_id:
+                        continue
+                    for conflict in item.get("conflicts", []):
+                        if conflict.get("field") == field:
+                            conflict["status"] = "resolved"
+                            conflict["resolved_value"] = resolved_value
+                            conflict["resolved_by"] = "user"
+                            conflict["resolved_at"] = datetime.now(UTC).isoformat()
+                            resolved = True
+
+            if not resolved:
+                return jsonify({"error": "Conflict not found"}), 404
+
+            research.research_meta = meta
+            db_session.commit()
+
+            return jsonify({"status": "success", "resolved": True})
+
+    except Exception:
+        logger.exception("Error resolving conflict")
+        return jsonify({"error": "Failed to resolve conflict"}), 500
+
+
+@research_bp.route("/api/templates/structured", methods=["GET"])
+@login_required
+def get_structured_templates():
+    """List available structured research templates."""
+    import glob
+
+    templates_dir = (
+        Path(__file__).parent.parent.parent
+        / "templates"
+        / "structured"
+    )
+    templates = []
+
+    try:
+        for path in sorted(templates_dir.glob("*.json")):
+            with open(path) as f:
+                template = json.load(f)
+                templates.append({
+                    "id": path.stem,
+                    "name": template.get("name", path.stem),
+                    "description": template.get("description", ""),
+                    "query_hint": template.get("query_hint", ""),
+                    "dimensions": template.get("dimensions", []),
+                    "fields": template.get("fields", []),
+                })
+    except Exception:
+        logger.exception("Error loading structured templates")
+
+    return jsonify({"status": "success", "templates": templates})
+
+
+@research_bp.route(
+    "/api/research/<string:research_id>/generate-summaries", methods=["POST"]
+)
+@login_required
+def generate_structured_summaries(research_id):
+    """Generate dimension summaries on-demand for completed structured research."""
+    username = session["username"]
+
+    try:
+        with get_user_db_session(username) as db_session:
+            research = (
+                db_session.query(ResearchHistory)
+                .filter_by(id=research_id)
+                .first()
+            )
+            if not research:
+                return jsonify({"error": "Research not found"}), 404
+            if research.mode != "structured":
+                return jsonify({"error": "Not a structured research session"}), 400
+
+            meta = research.research_meta or {}
+            structured_data = meta.get("structured_data")
+            if not structured_data:
+                return jsonify({"error": "No structured data found"}), 400
+
+            # Get LLM for summary generation
+            from ...settings import SettingsManager
+
+            settings_manager = SettingsManager(db_session=db_session)
+            settings_snapshot = meta.get("settings_snapshot", {})
+
+            from ...config.llm_config import get_llm
+
+            model = get_llm(settings_snapshot=settings_snapshot)
+            if not model:
+                return jsonify({"error": "No LLM available for summary generation"}), 500
+
+            # Generate summaries
+            from ...advanced_search_system.strategies.structured_strategy import (
+                StructuredResearchStrategy,
+            )
+
+            summaries = StructuredResearchStrategy.generate_summaries_from_data(
+                model=model,
+                query=research.query,
+                structured_data=structured_data,
+            )
+
+            # Store summaries in structured_data
+            structured_data["summaries"] = summaries
+            meta["structured_data"] = structured_data
+
+            research.research_meta = meta
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(research, "research_meta")
+            db_session.commit()
+
+            return jsonify({
+                "status": "success",
+                "summaries_count": len(summaries),
+                "summaries": summaries,
+            })
+
+    except Exception:
+        logger.exception("Error generating structured summaries")
+        return jsonify({"error": "Failed to generate summaries"}), 500
+
+
+# ---------------------------------------------------------------------------
+@research_bp.route(
+    "/api/research/<string:research_id>/refresh", methods=["POST"]
+)
+@login_required
+def refresh_structured_research(research_id):
+    """Re-run a completed structured research with the same schema.
+
+    Creates a new research session linked to the original via prior_research_id,
+    then executes immediately.
+    """
+    username = session["username"]
+
+    try:
+        with get_user_db_session(username) as db_session:
+            research = (
+                db_session.query(ResearchHistory)
+                .filter_by(id=research_id)
+                .first()
+            )
+            if not research:
+                return jsonify({"error": "Research not found"}), 404
+            if research.mode != "structured":
+                return jsonify({"error": "Not a structured research session"}), 400
+
+            meta = research.research_meta or {}
+            schema = meta.get("submission", {}).get("schema_definition", {})
+            if not schema:
+                return jsonify({"error": "No schema found to refresh"}), 400
+
+            # Inject prior_research_id for chaining
+            options = schema.get("options", {})
+            options["prior_research_id"] = research_id
+            options["auto_execute"] = True
+            schema["options"] = options
+
+        # Create a new structured research with the same schema
+        # We simulate a POST to our own create endpoint logic
+        import uuid as _uuid
+
+        new_id = str(_uuid.uuid4())
+        created_at = datetime.now(UTC).isoformat()
+
+        research_meta = {
+            "submission": {
+                "mode": "structured",
+                "schema_definition": schema,
+            },
+            "system": {
+                "timestamp": created_at,
+                "user": username,
+                "version": "1.0",
+            },
+            "structured_phase": "ready",
+        }
+
+        # Get settings snapshot
+        try:
+            from ...settings import SettingsManager
+
+            db_session = get_g_db_session()
+            if db_session:
+                sm = SettingsManager(db_session, owns_session=False)
+                try:
+                    db_session.commit()
+                except Exception:
+                    db_session.rollback()
+                research_meta["settings_snapshot"] = sm.get_all_settings(bypass_cache=True)
+        except Exception:
+            pass
+
+        # Create the record
+        db_session = get_g_db_session()
+        if db_session:
+            new_research = ResearchHistory(
+                id=new_id,
+                query=schema.get("query", research.query if research else ""),
+                mode="structured",
+                status="in_progress",
+                created_at=created_at,
+                progress_log=[{"time": created_at, "progress": 0}],
+                research_meta=research_meta,
+            )
+            db_session.add(new_research)
+            db_session.commit()
+
+        _start_structured_execution(new_id, username, research_meta)
+
+        return jsonify({
+            "status": "in_progress",
+            "phase": "researching",
+            "research_id": new_id,
+            "refreshed_from": research_id,
+        })
+
+    except Exception:
+        logger.exception("Error refreshing structured research")
+        return jsonify({"error": "Failed to refresh research"}), 500
+
+
+# ---------------------------------------------------------------------------
+# Structured Research Helpers
+# ---------------------------------------------------------------------------
+
+
+def _schema_needs_discovery(dimensions):
+    """Check if any dimension in the tree needs discovery."""
+    for dim in dimensions:
+        if dim.get("discover"):
+            return True
+        children = dim.get("children")
+        if children:
+            child_list = [children] if isinstance(children, dict) else children
+            if _schema_needs_discovery(child_list):
+                return True
+    return False
+
+
+def _count_leaf_cells(dimensions, parent_count=1):
+    """Count total leaf cells in the dimension tree."""
+    if not dimensions:
+        return parent_count
+
+    total = 0
+    for dim in dimensions:
+        values = dim.get("values", [])
+        if not values:
+            continue
+        children = dim.get("children")
+        if children:
+            child_list = [children] if isinstance(children, dict) else children
+            total += len(values) * _count_leaf_cells(child_list, 1)
+        else:
+            total += len(values)
+
+    return total * parent_count if total == 0 else total
+
+
+def _apply_dimension_mutations(dimensions, approve, remove, add):
+    """Apply approve/remove/add mutations to the first level of dimensions."""
+    for dim in dimensions:
+        values = dim.get("values", [])
+        if approve:
+            dim["values"] = [v for v in values if v in approve]
+        if remove:
+            dim["values"] = [v for v in dim.get("values", values) if v not in remove]
+        if add:
+            current = dim.get("values", [])
+            for v in add:
+                if v not in current:
+                    current.append(v)
+            dim["values"] = current
+
+
+def _start_structured_execution(research_id, username, research_meta):
+    """Start the structured research execution in a background thread."""
+    schema = research_meta.get("submission", {}).get("schema_definition", {})
+    settings_snapshot = research_meta.get("settings_snapshot", {})
+
+    user_password = get_user_password(username)
+
+    # Resolve model/search params from settings (same as start_research does)
+    from ...settings.manager import SettingsManager
+
+    with get_user_db_session(username) as db_session:
+        settings_manager = SettingsManager(db_session=db_session)
+        params = _extract_research_params({}, settings_manager)
+
+    # Allow schema options to override search engine
+    search_engine = params["search_engine"]
+    schema_engines = schema.get("options", {}).get("search_engines")
+    if schema_engines:
+        search_engine = schema_engines[0]
+
+    research_thread = start_research_process(
+        research_id,
+        schema.get("query", ""),
+        "structured",
+        run_research_process,
+        username=username,
+        user_password=user_password,
+        schema_definition=schema,
+        settings_snapshot=settings_snapshot,
+        model_provider=params["model_provider"],
+        model=params["model"],
+        custom_endpoint=params.get("custom_endpoint"),
+        search_engine=search_engine,
+        strategy="structured",
+        iterations=1,
+        questions_per_iteration=1,
+        max_results=schema.get("options", {}).get("max_items_per_cell", 10),
+    )
+
+    logger.info(
+        f"Started structured research thread for {research_id}: {research_thread.ident}"
+    )

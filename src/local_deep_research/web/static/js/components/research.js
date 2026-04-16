@@ -2329,6 +2329,28 @@
         const selectedModeRadio = document.querySelector('input[name="research_mode"]:checked');
         const mode = selectedModeRadio ? selectedModeRadio.value : 'quick';
 
+        // Structured mode: use dedicated API
+        if (mode === 'structured' && window.structuredResearch) {
+            window.structuredResearch.submitStructuredResearch(query).then(result => {
+                const overlay = document.getElementById('loading-overlay');
+                if (overlay) overlay.remove();
+
+                if (!result || result.status === 'error') {
+                    alert(result ? result.message : 'Structured research failed');
+                    return;
+                }
+
+                if (result.research_id) {
+                    window.location.href = '/progress/' + result.research_id;
+                }
+            }).catch(err => {
+                const overlay = document.getElementById('loading-overlay');
+                if (overlay) overlay.remove();
+                alert('Structured research failed: ' + String(err));
+            });
+            return;
+        }
+
         // Get values from form fields (query already read above)
         const modelProvider = modelProviderSelect ? modelProviderSelect.value : '';
 

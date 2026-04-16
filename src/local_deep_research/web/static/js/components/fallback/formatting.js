@@ -56,7 +56,8 @@
             'quick': 'Quick Summary',
             'detailed': 'Detailed Report',
             'standard': 'Standard Research',
-            'advanced': 'Advanced Research'
+            'advanced': 'Advanced Research',
+            'structured': 'Structured Research'
         };
 
         return modeMap[mode] || mode;

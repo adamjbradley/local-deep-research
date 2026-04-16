@@ -1325,3 +1325,235 @@ def download_source():
                 )
             # Log internal message, but show only generic message to user
             return jsonify({"success": False, "message": "Download failed"})
+
+
+# ---------------------------------------------------------------------------
+# Document Versioning & Re-research
+# ---------------------------------------------------------------------------
+
+
+@library_bp.route("/api/documents/<string:document_id>/versions", methods=["GET"])
+@login_required
+def get_document_versions(document_id):
+    """List all versions of a document."""
+    username = session["username"]
+
+    try:
+        from ...database.models.document_version import DocumentVersion
+
+        with get_user_db_session(username) as db_session:
+            versions = (
+                db_session.query(DocumentVersion)
+                .filter_by(document_id=document_id)
+                .order_by(DocumentVersion.version_number.desc())
+                .all()
+            )
+
+            return jsonify({
+                "status": "success",
+                "document_id": document_id,
+                "versions": [
+                    {
+                        "id": v.id,
+                        "version_number": v.version_number,
+                        "trigger": v.trigger,
+                        "trigger_research_id": v.trigger_research_id,
+                        "changes_summary": v.changes_summary,
+                        "created_at": v.created_at.isoformat() if v.created_at else None,
+                    }
+                    for v in versions
+                ],
+            })
+
+    except Exception:
+        logger.exception("Error fetching document versions")
+        return jsonify({"error": "Failed to fetch versions"}), 500
+
+
+@library_bp.route(
+    "/api/documents/<string:document_id>/versions/<int:version_number>",
+    methods=["GET"],
+)
+@login_required
+def get_document_version(document_id, version_number):
+    """Get a specific version's content."""
+    username = session["username"]
+
+    try:
+        from ...database.models.document_version import DocumentVersion
+
+        with get_user_db_session(username) as db_session:
+            version = (
+                db_session.query(DocumentVersion)
+                .filter_by(document_id=document_id, version_number=version_number)
+                .first()
+            )
+
+            if not version:
+                return jsonify({"error": "Version not found"}), 404
+
+            return jsonify({
+                "status": "success",
+                "version": {
+                    "id": version.id,
+                    "version_number": version.version_number,
+                    "text_content": version.text_content,
+                    "structured_data": version.structured_data,
+                    "trigger": version.trigger,
+                    "changes_summary": version.changes_summary,
+                    "created_at": version.created_at.isoformat() if version.created_at else None,
+                },
+            })
+
+    except Exception:
+        logger.exception("Error fetching document version")
+        return jsonify({"error": "Failed to fetch version"}), 500
+
+
+@library_bp.route(
+    "/api/documents/<string:document_id>/re-research", methods=["POST"]
+)
+@login_required
+def re_research_document(document_id):
+    """Create a new research session using a Document's content as context.
+
+    For structured research Documents: creates a structured session with the same schema.
+    For regular Documents: creates a quick research with the Document content as prior context.
+    """
+    username = session["username"]
+
+    try:
+        from ...database.models.library import Document
+
+        with get_user_db_session(username) as db_session:
+            document = (
+                db_session.query(Document)
+                .filter_by(id=document_id)
+                .first()
+            )
+            if not document:
+                return jsonify({"error": "Document not found"}), 404
+
+            # Determine the re-research approach based on source type
+            from ...database.models.library import SourceType
+
+            source_type = (
+                db_session.query(SourceType)
+                .filter_by(id=document.source_type_id)
+                .first()
+            )
+            source_name = source_type.name if source_type else ""
+
+            response_data = {
+                "document_id": document_id,
+                "document_title": document.title,
+                "source_type": source_name,
+            }
+
+            if source_name in ("structured_research", "structured_research_summary"):
+                # For structured research: redirect to refresh endpoint
+                if document.research_id:
+                    response_data["action"] = "redirect_refresh"
+                    response_data["research_id"] = document.research_id
+                    response_data["redirect_url"] = f"/api/research/{document.research_id}/refresh"
+                else:
+                    response_data["action"] = "new_research"
+                    response_data["query"] = document.title or "Re-research"
+                    response_data["prior_context"] = (document.text_content or "")[:4000]
+            else:
+                # For regular documents: provide context for a new research
+                response_data["action"] = "new_research"
+                response_data["query"] = document.title or "Re-research"
+                response_data["prior_context"] = (document.text_content or "")[:4000]
+                if document.research_id:
+                    response_data["prior_research_id"] = document.research_id
+
+            return jsonify({"status": "success", **response_data})
+
+    except Exception:
+        logger.exception("Error preparing re-research")
+        return jsonify({"error": "Failed to prepare re-research"}), 500
+
+
+@library_bp.route("/api/knowledge/snapshot", methods=["GET"])
+@login_required
+def get_knowledge_snapshot():
+    """Get knowledge state as of a specific date.
+
+    Reconstructs what Documents looked like at a given point in time
+    by finding the latest DocumentVersion for each Document before the date.
+
+    Query params:
+        date: ISO date string (e.g., 2026-04-01)
+        collection_id: Optional collection filter
+    """
+    username = session["username"]
+    date_str = request.args.get("date")
+    collection_id = request.args.get("collection_id")
+
+    if not date_str:
+        return jsonify({"error": "date parameter is required"}), 400
+
+    try:
+        from datetime import datetime, timezone
+        from ...database.models.document_version import DocumentVersion
+        from ...database.models.library import Document, DocumentCollection
+
+        snapshot_date = datetime.fromisoformat(date_str).replace(
+            hour=23, minute=59, second=59, tzinfo=timezone.utc
+        )
+
+        with get_user_db_session(username) as db_session:
+            # Get all documents (optionally filtered by collection)
+            doc_query = db_session.query(Document)
+            if collection_id:
+                doc_ids = (
+                    db_session.query(DocumentCollection.document_id)
+                    .filter_by(collection_id=collection_id)
+                    .subquery()
+                )
+                doc_query = doc_query.filter(Document.id.in_(doc_ids))
+
+            documents = doc_query.all()
+            snapshot_docs = []
+
+            for doc in documents:
+                # Find latest version before the snapshot date
+                version = (
+                    db_session.query(DocumentVersion)
+                    .filter(DocumentVersion.document_id == doc.id)
+                    .filter(DocumentVersion.created_at <= snapshot_date)
+                    .order_by(DocumentVersion.version_number.desc())
+                    .first()
+                )
+
+                if version:
+                    snapshot_docs.append({
+                        "document_id": doc.id,
+                        "title": doc.title,
+                        "version_number": version.version_number,
+                        "content_preview": (version.text_content or "")[:200],
+                        "trigger": version.trigger,
+                        "version_date": version.created_at.isoformat() if version.created_at else None,
+                    })
+                elif doc.created_at and doc.created_at <= snapshot_date:
+                    # No version history but document existed before the date
+                    snapshot_docs.append({
+                        "document_id": doc.id,
+                        "title": doc.title,
+                        "version_number": 0,
+                        "content_preview": (doc.text_content or "")[:200],
+                        "trigger": "original",
+                        "version_date": doc.created_at.isoformat() if doc.created_at else None,
+                    })
+
+            return jsonify({
+                "status": "success",
+                "snapshot_date": date_str,
+                "documents": snapshot_docs,
+                "total": len(snapshot_docs),
+            })
+
+    except Exception:
+        logger.exception("Error generating knowledge snapshot")
+        return jsonify({"error": "Failed to generate snapshot"}), 500

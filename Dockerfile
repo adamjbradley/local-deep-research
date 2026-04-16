@@ -72,31 +72,46 @@ COPY package.json package.json
 COPY package-lock.json* package-lock.json
 COPY vite.config.js vite.config.js
 
-# Source files last (changes most frequently). Note: with the current layout,
-# caching benefit is limited because all RUN commands (npm ci, npm run build,
-# pdm install) live in the builder stage which rebuilds when builder-base changes.
-# This ordering is still good practice for Dockerfile maintainability.
-COPY src/ src
+# NOTE: Source files are split into two COPY steps in the builder stage
+# to optimize layer caching. See comments below.
 
 ####
 # Builds the LDR service dependencies used in production.
 ####
 FROM builder-base AS builder
 
-# Install npm dependencies, build frontend, and install Python dependencies
-# PDM will automatically select the correct SQLCipher package based on platform
-# Using npm ci for reproducible builds with lockfile integrity verification
-# These RUNs are separate for caching
-RUN npm ci
+# Step 1: npm install (cached unless package.json/lock changes)
+RUN --mount=type=cache,target=/root/.npm \
+    npm ci
+
+# Step 2: Copy ONLY frontend source, then build with Vite.
+# Separated from Python source so that Python-only changes don't
+# invalidate the npm/Vite layers (~70s savings on typical rebuilds).
+# Vite only needs web/static/ (root + input) and vite.config.js (already copied).
+# If a future Vite plugin needs files outside web/, add them here.
+COPY src/local_deep_research/web/ src/local_deep_research/web/
 RUN npm run build
-RUN for i in 1 2 3; do \
-      if pdm install --prod --no-editable; then \
+
+# Step 3: Install Python DEPENDENCIES only (cached unless pdm.lock changes).
+# --no-self skips the local project package; only installs third-party deps.
+# This is the slowest step (~6 min) so caching it on Python-only changes
+# reduces rebuild from ~6 min to ~30s.
+RUN --mount=type=cache,target=/root/.cache/pdm \
+    for i in 1 2 3; do \
+      if pdm install --prod --no-editable --no-self; then \
         break; \
       else \
-        echo "PDM install attempt $i failed, retrying in 15s..."; \
+        echo "PDM deps install attempt $i failed, retrying in 15s..."; \
         sleep 15; \
       fi; \
     done
+
+# Step 4: Copy full Python source, then install the local project package.
+# COPY merges — it does NOT delete the dist/ created by Vite above.
+# pdm install here is fast (~15-30s) because all deps are already in the venv.
+COPY src/ src
+RUN --mount=type=cache,target=/root/.cache/pdm \
+    pdm install --prod --no-editable
 
 
 ####
@@ -193,7 +208,9 @@ COPY --from=builder /install/src/local_deep_research/web/static/dist/ /install/s
 
 # Install the package using PDM
 # PDM will automatically select the correct SQLCipher package based on platform
-RUN pdm install --no-editable
+RUN --mount=type=cache,target=/root/.cache/pdm \
+    pdm install --no-editable \
+    && chmod -R o-w /install/.venv/lib/python*/site-packages/local_deep_research/database/migrations/
 
 # Configure path to default to the venv python.
 ENV PATH="/install/.venv/bin:$PATH"

@@ -85,6 +85,10 @@ def get_history():
                     research.research_meta
                 )
 
+                # Include structured phase for structured research sessions
+                if research.research_meta and research.research_meta.get("structured_phase"):
+                    item["phase"] = research.research_meta["structured_phase"]
+
                 # Recalculate duration if null but both timestamps exist
                 if (
                     item["duration_seconds"] is None

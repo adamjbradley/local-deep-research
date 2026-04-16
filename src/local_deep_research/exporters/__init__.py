@@ -32,6 +32,8 @@ from . import odt_exporter  # noqa: F401
 from . import pdf_exporter  # noqa: F401
 from . import quarto_exporter  # noqa: F401
 from . import ris_exporter  # noqa: F401
+from . import csv_exporter  # noqa: F401
+from . import json_exporter  # noqa: F401
 
 __all__ = [
     "BaseExporter",

@@ -373,7 +373,8 @@
         // Simple fallback formatting
         const modeMap = {
             'quick': 'Quick Summary',
-            'detailed': 'Detailed Report'
+            'detailed': 'Detailed Report',
+            'structured': 'Structured Research'
         };
 
         return modeMap[mode] || mode;

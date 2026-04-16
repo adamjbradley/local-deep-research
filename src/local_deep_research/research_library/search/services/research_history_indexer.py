@@ -37,6 +37,8 @@ class ResearchHistoryIndexer:
 
     # Source type names used in the database
     SOURCE_TYPE_REPORT = "research_report"
+    SOURCE_TYPE_STRUCTURED = "structured_research"
+    SOURCE_TYPE_STRUCTURED_SUMMARY = "structured_research_summary"
     COLLECTION_TYPE = "research_history"
 
     def __init__(self, username: str, db_password: Optional[str] = None):
@@ -102,24 +104,35 @@ class ResearchHistoryIndexer:
                     "error": "Research has no report content",
                 }
 
+            # Check if this is structured research
+            is_structured = research.mode == "structured"
+            meta = research.research_meta or {}
+            structured_data = meta.get("structured_data") if is_structured else None
+
             try:
-                report_doc = self._create_document_from_report(
-                    research, collection_id, session
-                )
-                if report_doc is None:
-                    return {
-                        "status": "error",
-                        "error": "SourceType 'research_report' not found. "
-                        "Run library initialization.",
-                    }
+                if is_structured and structured_data:
+                    docs_added = self._index_structured_research(
+                        research, structured_data, collection_id, session
+                    )
+                else:
+                    report_doc = self._create_document_from_report(
+                        research, collection_id, session
+                    )
+                    if report_doc is None:
+                        return {
+                            "status": "error",
+                            "error": "SourceType not found. Run library initialization.",
+                        }
+                    docs_added = 1
+
                 logger.info(
-                    f"Created/found document for research: {research_id[:8]}"
+                    f"Created/found {docs_added} document(s) for research: {research_id[:8]}"
                 )
             except Exception:
-                logger.exception("Error creating report document")
+                logger.exception("Error creating documents")
                 return {
                     "status": "error",
-                    "error": "Failed to create report document",
+                    "error": "Failed to create documents",
                 }
 
             try:
@@ -135,7 +148,7 @@ class ResearchHistoryIndexer:
                 "status": "success",
                 "research_id": research_id,
                 "collection_id": collection_id,
-                "documents_added": 1,
+                "documents_added": docs_added,
             }
 
     def convert_all_research(self, force: bool = False) -> Dict[str, Any]:
@@ -256,6 +269,151 @@ class ResearchHistoryIndexer:
             "failed": failed,
             "collection_id": collection_id,
         }
+
+    def _index_structured_research(
+        self,
+        research: ResearchHistory,
+        structured_data: Dict[str, Any],
+        collection_id: str,
+        session,
+    ) -> int:
+        """Index structured research as Documents in the library.
+
+        Creates:
+        1. One parent Document (source_type: structured_research) with the
+           markdown summary as text_content and structured metadata in notes.
+        2. One Document per dimension summary (source_type: structured_research_summary)
+           with the narrative content — these get RAG-indexed for semantic search.
+
+        Returns:
+            Number of documents created.
+        """
+        import json as _json
+
+        docs_created = 0
+
+        # Resolve source types
+        structured_type = (
+            session.query(SourceType)
+            .filter_by(name=self.SOURCE_TYPE_STRUCTURED)
+            .first()
+        )
+        summary_type = (
+            session.query(SourceType)
+            .filter_by(name=self.SOURCE_TYPE_STRUCTURED_SUMMARY)
+            .first()
+        )
+
+        if not structured_type:
+            logger.warning(
+                f"SourceType '{self.SOURCE_TYPE_STRUCTURED}' not found. "
+                "Run library initialization."
+            )
+            # Fall back to regular report indexing
+            self._create_document_from_report(research, collection_id, session)
+            return 1
+
+        # Build tags from dimensions
+        tags = []
+        cells = structured_data.get("cells", [])
+        schema = structured_data.get("schema", {})
+        for cell in cells:
+            for k, v in cell.get("dimension_values", {}).items():
+                tag = f"{k}:{v}"
+                if tag not in tags:
+                    tags.append(tag)
+
+        # Compact structured metadata for notes field
+        compact_meta = {
+            "cells_count": len(cells),
+            "items_count": sum(len(c.get("items", [])) for c in cells),
+            "sources_count": len(structured_data.get("sources", [])),
+            "dimensions": [d.get("name") for d in schema.get("dimensions", [])],
+            "fields": [f.get("name") for f in schema.get("fields", [])],
+        }
+
+        # 1. Parent Document
+        content = research.report_content or ""
+        doc_hash = hashlib.sha256(
+            f"structured:{research.id}:{content[:100]}".encode()
+        ).hexdigest()
+
+        existing = (
+            session.query(Document)
+            .filter_by(research_id=research.id, source_type_id=structured_type.id)
+            .first()
+        )
+
+        if not existing:
+            parent_doc = Document(
+                id=str(uuid.uuid4()),
+                source_type_id=structured_type.id,
+                research_id=research.id,
+                document_hash=doc_hash,
+                file_size=len(content.encode("utf-8")),
+                file_type="markdown",
+                mime_type="text/markdown",
+                title=research.title or (research.query[:100] if research.query else "Untitled"),
+                text_content=content,
+                tags=tags,
+                notes=_json.dumps(compact_meta),
+                status=DocumentStatus.COMPLETED,
+                processed_at=datetime.now(UTC),
+                character_count=len(content),
+                word_count=len(content.split()),
+            )
+            session.add(parent_doc)
+            session.flush()
+            self._ensure_in_collection(parent_doc.id, collection_id, session)
+            docs_created += 1
+
+        # 2. Summary Documents (one per dimension summary)
+        summaries = structured_data.get("summaries", [])
+        if summary_type and summaries:
+            for s in summaries:
+                dim_value = s.get("dimension_value", "")
+                summary_content = s.get("content", "")
+                if not summary_content:
+                    continue
+
+                s_hash = hashlib.sha256(
+                    f"summary:{research.id}:{dim_value}:{summary_content[:50]}".encode()
+                ).hexdigest()
+
+                existing_summary = (
+                    session.query(Document)
+                    .filter_by(document_hash=s_hash)
+                    .first()
+                )
+
+                if not existing_summary:
+                    dim_name = s.get("dimension_name", "")
+                    summary_doc = Document(
+                        id=str(uuid.uuid4()),
+                        source_type_id=summary_type.id,
+                        research_id=research.id,
+                        document_hash=s_hash,
+                        file_size=len(summary_content.encode("utf-8")),
+                        file_type="markdown",
+                        mime_type="text/markdown",
+                        title=s.get("title", f"{dim_value} Summary"),
+                        text_content=summary_content,
+                        tags=[f"{dim_name}:{dim_value}"] if dim_name else [dim_value],
+                        status=DocumentStatus.COMPLETED,
+                        processed_at=datetime.now(UTC),
+                        character_count=len(summary_content),
+                        word_count=len(summary_content.split()),
+                    )
+                    session.add(summary_doc)
+                    session.flush()
+                    self._ensure_in_collection(summary_doc.id, collection_id, session)
+                    docs_created += 1
+
+        logger.info(
+            f"Indexed structured research {research.id[:8]}: "
+            f"{docs_created} docs (1 parent + {len(summaries)} summaries)"
+        )
+        return docs_created
 
     def _create_document_from_report(
         self,

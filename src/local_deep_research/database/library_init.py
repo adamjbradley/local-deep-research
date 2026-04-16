@@ -58,6 +58,18 @@ def seed_source_types(username: str, password: str = None) -> None:
             "description": "Sources discovered during research with content for semantic search",
             "icon": "link",
         },
+        {
+            "name": "structured_research",
+            "display_name": "Structured Research",
+            "description": "Structured research output with dimension-based data extraction",
+            "icon": "table",
+        },
+        {
+            "name": "structured_research_summary",
+            "display_name": "Structured Research Summary",
+            "description": "Narrative summary for a dimension value from structured research",
+            "icon": "file-alt",
+        },
     ]
 
     try:

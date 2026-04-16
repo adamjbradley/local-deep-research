@@ -36,6 +36,8 @@ ALLOWED_MODULE_PATHS: frozenset[str] = frozenset(
         ".engines.search_engine_ddg",
         ".engines.search_engine_elasticsearch",
         ".engines.search_engine_exa",
+        ".engines.search_engine_git_repo",
+        ".engines.search_engine_structured",
         ".engines.search_engine_github",
         ".engines.search_engine_google_pse",
         ".engines.search_engine_guardian",

@@ -2033,6 +2033,20 @@
         "value": "repositories",
         "visible": true
     },
+    "search.engine.web.github.default_params.repos": {
+        "category": "github",
+        "description": "Scope searches to specific repos (e.g. [\"org/repo1\", \"org/repo2\"]). Leave empty to search all of GitHub.",
+        "editable": true,
+        "max_value": null,
+        "min_value": null,
+        "name": "Repos Filter",
+        "options": null,
+        "step": null,
+        "type": "SEARCH",
+        "ui_element": "json",
+        "value": [],
+        "visible": true
+    },
     "search.engine.web.github.reliability": {
         "category": "github",
         "description": "Reliability rating (0-1) for GitHub as a source. Great for code and technical projects.",

@@ -1,0 +1,43 @@
+# Version control
+.git
+.github
+
+# IDE and tooling
+.claude
+.serena
+.remember
+.pre-commit-hooks
+.semgrep
+.zap
+
+# Documentation and examples (not needed in image)
+docs
+examples
+community_benchmark_results
+unraid-templates
+
+# Tests (run separately, not in production image)
+tests
+
+# Markdown files (except README needed by pyproject.toml)
+*.md
+!README.md
+
+# Config files not needed in build
+.gitleaks*
+.gitleaksignore
+.grype*
+.hadolint*
+.yamllint*
+.safety-policy*
+.trivyignore
+bearer.yml
+lighthouserc.json
+eslint.config.js
+playwright.config.js
+.nvmrc
+.file-whitelist.txt
+.pre-commit-config.yaml
+CONTRIBUTING.md
+SECURITY.md
+cookiecutter-docker

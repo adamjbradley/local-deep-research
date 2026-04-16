@@ -1,0 +1,21 @@
+{
+  "name": "Competitor Analysis",
+  "description": "Compare competitors across key dimensions",
+  "query_hint": "e.g., 'Identity verification vendors in North America'",
+  "dimensions": [
+    {
+      "name": "competitor",
+      "discover": true,
+      "prompt": "What are the major competitors for {query}?",
+      "max_values": 10
+    }
+  ],
+  "fields": [
+    {"name": "product", "type": "string", "description": "Primary product or service offering"},
+    {"name": "pricing_model", "type": "string", "description": "How they charge (subscription, per-transaction, etc.)"},
+    {"name": "target_market", "type": "string", "description": "Primary customer segment"},
+    {"name": "strengths", "type": "string", "description": "Key competitive advantages"},
+    {"name": "weaknesses", "type": "string", "description": "Known limitations or disadvantages"},
+    {"name": "market_share", "type": "string", "description": "Estimated market share or position"}
+  ]
+}

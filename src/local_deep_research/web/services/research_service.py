@@ -665,6 +665,21 @@ def run_research_process(research_id, query, mode, **kwargs):
                 # For other errors, re-raise to avoid silent failures
                 raise
 
+        # ---- Structured mode: bypass AdvancedSearchSystem entirely ----
+        if mode == "structured":
+            from ..services._structured_runner import run_structured_mode
+
+            return run_structured_mode(
+                research_id=research_id,
+                query=query,
+                llm=use_llm,
+                search=use_search,
+                kwargs=kwargs,
+                settings_snapshot=settings_snapshot,
+                progress_callback=progress_callback,
+                username=username,
+            )
+
         # Set the progress callback in the system
         system = AdvancedSearchSystem(
             llm=use_llm,  # type: ignore[arg-type]

@@ -1,0 +1,90 @@
+{
+    "search.structured.iterations_per_cell": {
+        "category": "structured_research",
+        "description": "Number of search iterations per dimension cell. Higher values find more results but take longer.",
+        "editable": true,
+        "max_value": 5,
+        "min_value": 1,
+        "name": "Iterations Per Cell",
+        "options": null,
+        "step": 1,
+        "type": "SEARCH",
+        "ui_element": "number",
+        "value": 2,
+        "visible": true
+    },
+    "search.structured.max_items_per_cell": {
+        "category": "structured_research",
+        "description": "Maximum number of items to extract per dimension cell.",
+        "editable": true,
+        "max_value": 50,
+        "min_value": 1,
+        "name": "Max Items Per Cell",
+        "options": null,
+        "step": 1,
+        "type": "SEARCH",
+        "ui_element": "number",
+        "value": 10,
+        "visible": true
+    },
+    "search.structured.max_cells": {
+        "category": "structured_research",
+        "description": "Maximum total cells to research. Prevents runaway costs from large dimension trees.",
+        "editable": true,
+        "max_value": 1000,
+        "min_value": 1,
+        "name": "Max Total Cells",
+        "options": null,
+        "step": 10,
+        "type": "SEARCH",
+        "ui_element": "number",
+        "value": 200,
+        "visible": true
+    },
+    "search.structured.cross_cell_context": {
+        "category": "structured_research",
+        "description": "Pass findings from earlier cells as context to later cells. Improves accuracy but makes cells order-dependent.",
+        "editable": true,
+        "max_value": null,
+        "min_value": null,
+        "name": "Cross-Cell Context",
+        "options": null,
+        "step": null,
+        "type": "SEARCH",
+        "ui_element": "checkbox",
+        "value": true,
+        "visible": true
+    },
+    "search.structured.enrichment_mode": {
+        "category": "structured_research",
+        "description": "How child-level findings affect parent data. 'correct' flags contradictions, 'append' adds missed items, 'ignore' keeps levels independent.",
+        "editable": true,
+        "max_value": null,
+        "min_value": null,
+        "name": "Enrichment Mode",
+        "options": [
+            {"label": "Correct", "value": "correct"},
+            {"label": "Append", "value": "append"},
+            {"label": "Ignore", "value": "ignore"}
+        ],
+        "step": null,
+        "type": "SEARCH",
+        "ui_element": "select",
+        "value": "correct",
+        "visible": true
+    },
+    "search.structured.generate_summaries": {
+        "category": "structured_research",
+        "description": "Automatically generate a narrative summary for each top-level dimension value after research completes.",
+        "editable": true,
+        "max_value": null,
+        "min_value": null,
+        "name": "Generate Dimension Summaries",
+        "options": null,
+        "step": null,
+        "type": "SEARCH",
+        "ui_element": "checkbox",
+        "value": false,
+        "visible": true
+    }
+}
