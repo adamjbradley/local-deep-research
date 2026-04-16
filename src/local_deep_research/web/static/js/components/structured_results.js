@@ -412,16 +412,11 @@
       var contentDiv = document.createElement("div");
       contentDiv.style.cssText = "padding:1rem;";
 
-      // Render as plain text. The content is LLM-generated (same trust
-      // model as the rest of the app's report rendering).
-      if (false) {
-        // Placeholder for future markdown rendering if needed
-      } else {
-        var pre = document.createElement("pre");
-        pre.style.cssText = "white-space:pre-wrap; font-family:inherit;";
-        pre.textContent = s.content || "";
-        contentDiv.appendChild(pre);
-      }
+      // Render as plain text
+      var pre = document.createElement("pre");
+      pre.style.cssText = "white-space:pre-wrap; font-family:inherit;";
+      pre.textContent = s.content || "";
+      contentDiv.appendChild(pre);
 
       details.appendChild(contentDiv);
       container.appendChild(details);

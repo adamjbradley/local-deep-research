@@ -1,8 +1,36 @@
 # Structured Research: Design Spec
 
 **Date:** 2026-04-15  
-**Status:** Draft  
-**Author:** Adam Bradley + Claude
+**Status:** Implemented  
+**Author:** Adam Bradley + Claude  
+**Branch:** feature/git-repo-search-engine  
+**PR:** https://github.com/adamjbradley/local-deep-research/pull/1  
+**Tests:** 35 unit tests passing  
+
+### Implementation Status
+
+| Feature | Status | Notes |
+|---------|--------|-------|
+| Schema definition + nested dimensions | Done | Unlimited depth, cross-product |
+| Enum normalization | Done | 4-step: exact → case → LLM → unknown |
+| Canonical flat cells list | Done | cell_id = sorted pipe-delimited |
+| Two-phase session (discovery → execute) | Done | Service layer owns discovery |
+| Delta research + history | Done | Field change detection, compaction |
+| Item drill-down (source: items) | Done | Second pass after parent level |
+| Multi-source research | Partial | ParallelSearchEngine hook, factory TODO |
+| Knowledge flow (context, enrichment) | Done | Cross-cell context, prior research chaining |
+| CSV + JSON exporters | Done | ZIP bundle, roundtrip JSON |
+| Confidence scoring | Done | high/medium/low/unverified |
+| Temporal provenance | Done | content_date + discovered_at |
+| Dimension summaries | Done | On-demand + opt-in auto |
+| Dashboard UI | Done | Mode toggle, builders, templates, refinement |
+| Results page | Done | Table, nav, export, summaries, refinement panel |
+| Knowledge base integration | Done | RAG indexing, structured search engine |
+| Document versioning | Done | Model + table creation, API endpoints |
+| Refresh/re-research | Done | Same-schema re-run with chaining |
+| Point-in-time snapshots | Done | API endpoint |
+| Docker optimizations | Done | .dockerignore, BuildKit, layer splits |
+| Per-level engine overrides | Hook only | Detection + logging, factory wiring TODO |
 
 ## Problem
 

@@ -1241,10 +1241,20 @@ def get_research_report(research_id):
             # Examples expect 'summary', 'sources', 'findings' at top level
             safe_metadata = strip_settings_snapshot(metadata)
 
-            # For structured research, include structured_data in response
+            # For structured research, include structured_data in response.
+            # Summaries are included but sources are capped to prevent
+            # multi-MB API responses on large research runs.
             structured_data = None
             if metadata and metadata.get("structured_data"):
-                structured_data = metadata["structured_data"]
+                sd = metadata["structured_data"]
+                # Cap sources to first 200 in the API response (full set available via export)
+                sources = sd.get("sources", [])
+                if len(sources) > 200:
+                    sd = {**sd, "sources": sources[:200],
+                          "warnings": sd.get("warnings", []) + [
+                              f"Sources capped at 200 in API response ({len(sources)} total). Use export for full data."
+                          ]}
+                structured_data = sd
 
             return jsonify(
                 {
@@ -2216,9 +2226,6 @@ def generate_structured_summaries(research_id):
                 return jsonify({"error": "No structured data found"}), 400
 
             # Get LLM for summary generation
-            from ...settings import SettingsManager
-
-            settings_manager = SettingsManager(db_session=db_session)
             settings_snapshot = meta.get("settings_snapshot", {})
 
             from ...config.llm_config import get_llm
@@ -2382,7 +2389,7 @@ def _schema_needs_discovery(dimensions):
 def _count_leaf_cells(dimensions, parent_count=1):
     """Count total leaf cells in the dimension tree."""
     if not dimensions:
-        return parent_count
+        return 0
 
     total = 0
     for dim in dimensions:
@@ -2392,27 +2399,49 @@ def _count_leaf_cells(dimensions, parent_count=1):
         children = dim.get("children")
         if children:
             child_list = [children] if isinstance(children, dict) else children
-            total += len(values) * _count_leaf_cells(child_list, 1)
+            child_count = _count_leaf_cells(child_list, 1)
+            total += len(values) * max(child_count, 1)
         else:
             total += len(values)
 
-    return total * parent_count if total == 0 else total
+    return total
 
 
 def _apply_dimension_mutations(dimensions, approve, remove, add):
-    """Apply approve/remove/add mutations to the first level of dimensions."""
+    """Apply approve/remove/add mutations to the first dimension that has matching values.
+
+    Only mutates the first dimension whose existing values overlap with the
+    approve/remove/add lists, preventing accidental zeroing of unrelated dimensions.
+    """
+    if not (approve or remove or add):
+        return
+
+    target_dim = None
+    # Find the dimension whose values overlap with the mutation sets
+    mutation_values = set(approve or []) | set(remove or []) | set(add or [])
     for dim in dimensions:
-        values = dim.get("values", [])
-        if approve:
-            dim["values"] = [v for v in values if v in approve]
-        if remove:
-            dim["values"] = [v for v in dim.get("values", values) if v not in remove]
-        if add:
-            current = dim.get("values", [])
-            for v in add:
-                if v not in current:
-                    current.append(v)
-            dim["values"] = current
+        existing = set(dim.get("values", []))
+        if existing & mutation_values or not existing:
+            target_dim = dim
+            break
+
+    if target_dim is None and dimensions:
+        target_dim = dimensions[0]  # Fallback to first
+
+    if target_dim is None:
+        return
+
+    values = target_dim.get("values", [])
+    if approve:
+        target_dim["values"] = [v for v in values if v in approve]
+    if remove:
+        target_dim["values"] = [v for v in target_dim.get("values", values) if v not in remove]
+    if add:
+        current = target_dim.get("values", [])
+        for v in add:
+            if v not in current:
+                current.append(v)
+        target_dim["values"] = current
 
 
 def _start_structured_execution(research_id, username, research_meta):
