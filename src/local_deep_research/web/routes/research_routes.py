@@ -2046,6 +2046,8 @@ def execute_structured_research(research_id):
             meta["structured_phase"] = "researching"
             research.research_meta = meta
             research.status = ResearchStatus.IN_PROGRESS
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(research, "research_meta")
             db_session.commit()
 
         _start_structured_execution(research_id, username, meta)
@@ -2146,6 +2148,8 @@ def resolve_structured_conflict(research_id):
                 return jsonify({"error": "Conflict not found"}), 404
 
             research.research_meta = meta
+            from sqlalchemy.orm.attributes import flag_modified
+            flag_modified(research, "research_meta")
             db_session.commit()
 
             return jsonify({"status": "success", "resolved": True})
@@ -2284,6 +2288,9 @@ def refresh_structured_research(research_id):
             if not schema:
                 return jsonify({"error": "No schema found to refresh"}), 400
 
+            # Capture values before session closes to avoid DetachedInstanceError
+            original_query = research.query or ""
+
             # Inject prior_research_id for chaining
             options = schema.get("options", {})
             options["prior_research_id"] = research_id
@@ -2330,7 +2337,7 @@ def refresh_structured_research(research_id):
         if db_session:
             new_research = ResearchHistory(
                 id=new_id,
-                query=schema.get("query", research.query if research else ""),
+                query=schema.get("query", original_query),
                 mode="structured",
                 status="in_progress",
                 created_at=created_at,

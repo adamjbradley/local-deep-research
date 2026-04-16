@@ -423,6 +423,8 @@ def _update_research_status(research_id, username, status, error=None):
                     meta["error"] = error
                     meta["structured_phase"] = "error"
                     research.research_meta = meta
+                    from sqlalchemy.orm.attributes import flag_modified
+                    flag_modified(research, "research_meta")
                 db_session.commit()
     except Exception:
         logger.exception(f"Failed to update status for {research_id}")

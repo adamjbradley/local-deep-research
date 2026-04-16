@@ -211,10 +211,15 @@ class GitRepoSearchEngine(BaseSearchEngine):
 
     def _git_env(self) -> Dict[str, str]:
         """Build environment for git subprocesses."""
+        import shlex
+
         env = os.environ.copy()
         if self.ssh_key_path:
+            key_path = Path(self.ssh_key_path).resolve()
+            if not key_path.is_file():
+                raise ValueError(f"SSH key not found: {self.ssh_key_path}")
             env["GIT_SSH_COMMAND"] = (
-                f"ssh -i {self.ssh_key_path} "
+                f"ssh -i {shlex.quote(str(key_path))} "
                 f"-o StrictHostKeyChecking=accept-new"
             )
         # Prevent git from prompting for credentials interactively
@@ -288,14 +293,16 @@ class GitRepoSearchEngine(BaseSearchEngine):
         max_count: int,
     ) -> List[Dict[str, Any]]:
         """Run git grep on a single repo and return preview dicts."""
+        # Use -e to explicitly mark the query as a pattern (prevents
+        # queries starting with '-' from being interpreted as flags)
         cmd = [
             "git", "grep",
             "-n", "-i",
             f"--max-count={max_count}",
-            query,
+            "-e", query,
         ]
 
-        # Restrict to specific file patterns
+        # Restrict to specific file patterns (validated: no leading '-')
         if self.file_patterns:
             cmd.append("--")
             cmd.extend(self.file_patterns)
