@@ -1108,6 +1108,12 @@ def get_history():
                 if hasattr(research, "title") and research.title is not None:
                     item["title"] = research.title
 
+                # Expose structured research phase (parity with /history/api)
+                if research.research_meta and research.research_meta.get(
+                    "structured_phase"
+                ):
+                    item["phase"] = research.research_meta["structured_phase"]
+
                 history_items.append(item)
 
         return jsonify({"status": "success", "items": history_items})
@@ -1789,6 +1795,22 @@ def start_structured_research():
         return jsonify(
             {"status": "error", "message": "At least one field is required"}
         ), 400
+
+    # Validate field types against the supported set (mirrors the UI dropdown)
+    valid_field_types = {"string", "enum", "number", "boolean"}
+    for field in schema_definition["fields"]:
+        field_type = field.get("type", "string")
+        if field_type not in valid_field_types:
+            return jsonify(
+                {
+                    "status": "error",
+                    "message": (
+                        f"Invalid field type '{field_type}' for field "
+                        f"'{field.get('name', '')}'. Must be one of: "
+                        f"{', '.join(sorted(valid_field_types))}"
+                    ),
+                }
+            ), 400
 
     username = session["username"]
     auto_execute = schema_definition["options"].get("auto_execute", False)
