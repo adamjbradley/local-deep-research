@@ -94,6 +94,7 @@ src/local_deep_research/web/static/css/themes.css
 !.github/CODEOWNERS
 !.github/security/*.txt
 !.gitleaksignore
+!.gitattributes
 !.grype.yaml
 
 # Allow installer files only in installers directory (text scripts only)
