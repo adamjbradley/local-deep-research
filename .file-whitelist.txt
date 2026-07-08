@@ -24,6 +24,7 @@
 # JSON — path-scoped
 # ---------------------------------------------------------------------------
 ^src/local_deep_research/defaults/.*\.json$
+^src/local_deep_research/templates/.*\.json$
 ^cookiecutter-docker/.*\.json$
 ^package\.json$
 ^package-lock\.json$
@@ -75,6 +76,7 @@
 .*\.gitkeep$
 .*\.gitignore$
 ^\.gitattributes$
+^\.dockerignore$
 ^\.coveragerc$
 ^\.gitleaksignore$
 ^\.semgrepignore$
