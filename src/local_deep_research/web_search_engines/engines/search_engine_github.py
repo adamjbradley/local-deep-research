@@ -28,6 +28,7 @@ class GitHubSearchEngine(BaseSearchEngine):
         search_type: str = "repositories",
         include_readme: bool = True,
         include_issues: bool = False,
+        repos: Optional[List[str]] = None,
         llm: Optional[BaseLLM] = None,
         max_filtered_results: Optional[int] = None,
         settings_snapshot: Optional[Dict[str, Any]] = None,
@@ -41,6 +42,7 @@ class GitHubSearchEngine(BaseSearchEngine):
             search_type: Type of GitHub search ("repositories", "code", "issues", "users")
             include_readme: Whether to include README content for repositories
             include_issues: Whether to include recent issues for repositories
+            repos: Optional list of repos to scope searches to (e.g. ["org/repo1", "org/repo2"])
             llm: Language model for relevance filtering
             max_filtered_results: Maximum number of results to keep after filtering
         """
@@ -55,6 +57,7 @@ class GitHubSearchEngine(BaseSearchEngine):
         self.search_type = search_type
         self.include_readme = include_readme
         self.include_issues = include_issues
+        self.repos: List[str] = self._ensure_list(repos)
 
         self._owns_llm = False
 
@@ -184,6 +187,13 @@ class GitHubSearchEngine(BaseSearchEngine):
         try:
             # Optimize GitHub query using LLM
             github_query = self._optimize_github_query(query)
+
+            # Scope to specific repos if configured
+            if self.repos:
+                repo_qualifiers = " ".join(
+                    f"repo:{r}" for r in self.repos
+                )
+                github_query = f"{github_query} {repo_qualifiers}"
 
             logger.info(f"Final GitHub query: {github_query}")
 

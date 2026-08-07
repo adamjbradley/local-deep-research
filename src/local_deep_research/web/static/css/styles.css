@@ -2943,3 +2943,58 @@ input[type="number"].ldr-form-control::-webkit-inner-spin-button {
         scroll-behavior: auto !important;
     }
 }
+
+/* Structured Research UI */
+.ldr-btn-small {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+    background: var(--bg-tertiary);
+    color: var(--text-secondary);
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background 0.15s;
+}
+.ldr-btn-small:hover {
+    background: var(--accent-primary);
+    color: #fff;
+}
+
+.ldr-btn-icon {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    background: transparent;
+    color: var(--text-muted);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 1.1rem;
+    line-height: 1;
+    transition: color 0.15s, background 0.15s;
+}
+.ldr-btn-icon:hover {
+    color: #ff4d4d;
+    background: rgba(255, 77, 77, 0.1);
+}
+
+.ldr-structured-builder {
+    margin-top: 0.5rem;
+}
+
+.ldr-structured-row {
+    margin-bottom: 0.25rem;
+}
+
+.dim-children:not(:empty) {
+    border-left: 2px solid var(--accent-primary);
+    padding-left: 0.75rem;
+    margin-left: 1.5rem;
+    margin-top: 0.25rem;
+    margin-bottom: 0.25rem;
+}

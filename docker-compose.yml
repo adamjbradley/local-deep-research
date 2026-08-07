@@ -18,6 +18,10 @@
 
 services:
   local-deep-research:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: ldr
     image: localdeepresearch/local-deep-research:latest
 
     networks:
@@ -210,6 +214,11 @@ services:
       - "no-new-privileges:true"
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN        # entrypoint needs to set ownership on /etc/searxng
+      - DAC_OVERRIDE # entrypoint needs to create settings.yml in /etc/searxng
+      - SETUID       # entrypoint drops from root to searxng user
+      - SETGID       # entrypoint drops from root to searxng group
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:8080/healthz"]
       interval: 30s

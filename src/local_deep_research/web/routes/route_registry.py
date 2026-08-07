@@ -86,6 +86,42 @@ ROUTE_REGISTRY: dict[str, Any] = {
                 "research_details_page",
                 "Research details page",
             ),
+            (
+                "POST",
+                "/api/research/structured",
+                "start_structured_research",
+                "Create structured research session",
+            ),
+            (
+                "PATCH",
+                "/api/research/<string:research_id>/dimensions",
+                "update_structured_dimensions",
+                "Update structured research dimensions",
+            ),
+            (
+                "POST",
+                "/api/research/<string:research_id>/execute",
+                "execute_structured_research",
+                "Execute structured research cells",
+            ),
+            (
+                "GET",
+                "/api/research/<string:research_id>/history",
+                "get_structured_history",
+                "Get structured research dimension history",
+            ),
+            (
+                "PATCH",
+                "/api/research/<string:research_id>/resolve-conflict",
+                "resolve_structured_conflict",
+                "Resolve cross-level data conflict",
+            ),
+            (
+                "GET",
+                "/api/templates/structured",
+                "get_structured_templates",
+                "List structured research templates",
+            ),
         ],
     },
     "api_v1": {

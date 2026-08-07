@@ -49,6 +49,7 @@ from .news import (
 )
 
 # Import Library models - Unified architecture
+from .document_version import DocumentVersion  # noqa: F401
 from .library import (
     # New unified models
     SourceType,

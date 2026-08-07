@@ -58,6 +58,18 @@ def seed_source_types(username: str, password: str = None) -> None:
             "description": "Sources discovered during research with content for semantic search",
             "icon": "link",
         },
+        {
+            "name": "structured_research",
+            "display_name": "Structured Research",
+            "description": "Structured research output with dimension-based data extraction",
+            "icon": "table",
+        },
+        {
+            "name": "structured_research_summary",
+            "display_name": "Structured Research Summary",
+            "description": "Narrative summary for a dimension value from structured research",
+            "icon": "file-alt",
+        },
     ]
 
     try:
@@ -200,6 +212,17 @@ def initialize_library_for_user(username: str, password: str = None) -> dict:
     }
 
     try:
+        # Ensure document_versions table exists (added for structured research)
+        try:
+            from .models.document_version import DocumentVersion
+            from .models.library import Base
+
+            with get_user_db_session(username, password) as sess:
+                engine = sess.get_bind()
+                DocumentVersion.__table__.create(engine, checkfirst=True)
+        except Exception:
+            logger.debug("Could not ensure document_versions table", exc_info=True)
+
         # Seed source types
         seed_source_types(username, password)
         results["source_types_seeded"] = True

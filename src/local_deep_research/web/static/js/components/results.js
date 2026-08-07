@@ -174,8 +174,10 @@
                 populateMetadata(responseData);
             }
 
-            // Render the content
-            if (responseData.content && typeof responseData.content === 'string') {
+            // Check for structured research data — render as table if present
+            if (window.structuredResults && window.structuredResults.tryRenderStructured(responseData, resultsContainer)) {
+                SafeLogger.log('Rendered structured research results');
+            } else if (responseData.content && typeof responseData.content === 'string') {
                 SafeLogger.log('Rendering content from API response');
                 renderResults(responseData.content);
             } else {

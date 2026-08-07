@@ -1,0 +1,19 @@
+{
+  "name": "Country-Product Matrix",
+  "description": "Map products/services by country or region",
+  "query_hint": "e.g., 'Digital Identity products used in APAC'",
+  "dimensions": [
+    {
+      "name": "country",
+      "values": [],
+      "placeholder": "Enter countries or set to discover"
+    }
+  ],
+  "fields": [
+    {"name": "product_name", "type": "string", "description": "Name of the product or platform"},
+    {"name": "vendor", "type": "string", "description": "Organization that operates or sells it"},
+    {"name": "category", "type": "string", "description": "Primary function or category"},
+    {"name": "status", "type": "enum", "options": ["active", "pilot", "planned", "deprecated"]},
+    {"name": "year_launched", "type": "string", "description": "Year the product was launched or went live"}
+  ]
+}
